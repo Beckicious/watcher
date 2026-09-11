@@ -16,7 +16,8 @@ notify() {
     -H "Priority: ${priority}" \
     -H "Tags: ${tags}" \
     -H "Click: ${URL}" \
-    -d "${body}" \
+    -H "Actions: view, Open on wog.ch, ${URL}" \
+    -d "${body}"$'\n\n'"${URL}" \
     "https://ntfy.sh/${NTFY_TOPIC}" >/dev/null
 }
 
@@ -56,6 +57,10 @@ emit prev "$prev"
 
 if [ "$status" = "$prev" ]; then
   emit changed false
+  if [ -n "${HEARTBEAT:-}" ]; then
+    notify "Still watching: ${PRODUCT_NAME}" low "hourglass_flowing_sand" \
+      "No change. wog.ch still reports ${status}. Checked $(date -u '+%Y-%m-%d %H:%M')Z."
+  fi
   exit 0
 fi
 

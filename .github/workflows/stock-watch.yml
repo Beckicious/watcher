@@ -2,10 +2,18 @@ name: stock-watch
 
 on:
   schedule:
-    # Private repos bill each run as a full minute against 2000 min/month;
-    # */30 stays under. Public repos are unmetered and can use */15.
-    - cron: '*/30 * * * *'
+    # TEMPORARY: */5 is GitHub's floor, for confirming the scheduler fires.
+    # Revert to */30 once verified: on a private repo each run bills a full
+    # minute against 2000 min/month, so */5 exhausts the quota in ~7 days.
+    - cron: '*/5 * * * *'
+    # Daily liveness ping so silence is distinguishable from a dead watcher.
+    - cron: '5 6 * * *'
   workflow_dispatch:
+    inputs:
+      heartbeat:
+        description: 'Send a liveness ping even if nothing changed'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -23,6 +31,7 @@ jobs:
       - id: check
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          HEARTBEAT: ${{ (github.event.schedule == '5 6 * * *' || inputs.heartbeat) && '1' || '' }}
         run: bash ./scripts/check-stock.sh
 
       - if: steps.check.outputs.changed == 'true'
