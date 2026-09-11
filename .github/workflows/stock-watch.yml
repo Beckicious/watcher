@@ -23,7 +23,7 @@ jobs:
       - id: check
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: ./scripts/check-stock.sh
+        run: bash ./scripts/check-stock.sh
 
       - if: steps.check.outputs.changed == 'true'
         env:
