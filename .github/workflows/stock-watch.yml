@@ -2,10 +2,9 @@ name: stock-watch
 
 on:
   schedule:
-    # TEMPORARY: */5 is GitHub's floor, for confirming the scheduler fires.
-    # Revert to */30 once verified: on a private repo each run bills a full
-    # minute against 2000 min/month, so */5 exhausts the quota in ~7 days.
-    - cron: '*/5 * * * *'
+    # Private repos bill each run as a full minute against 2000 min/month;
+    # */30 fits with headroom.
+    - cron: '*/30 * * * *'
     # Daily liveness ping so silence is distinguishable from a dead watcher.
     - cron: '5 6 * * *'
   workflow_dispatch:
@@ -17,6 +16,11 @@ on:
 
 permissions:
   contents: write
+  actions: write
+
+# End of 5 November 2026 in Europe/Zurich (CET, UTC+1).
+env:
+  DEADLINE: '2026-11-05T23:00:00Z'
 
 concurrency:
   group: stock-watch
@@ -28,7 +32,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - id: deadline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ "$(date -u +%s)" -lt "$(date -u -d "$DEADLINE" +%s)" ]; then
+            echo "expired=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "expired=true" >> "$GITHUB_OUTPUT"
+          curl -sS --max-time 20 --retry 2 \
+            -H "Title: Stock watcher retired" \
+            -H "Priority: default" \
+            -H "Tags: wave" \
+            -d "Deadline passed ($DEADLINE). Scheduled runs are now disabled. Re-enable with: gh workflow enable stock-watch" \
+            "https://ntfy.sh/${NTFY_TOPIC}" >/dev/null
+          gh workflow disable stock-watch --repo "$GITHUB_REPOSITORY"
+          gh workflow disable keepalive --repo "$GITHUB_REPOSITORY"
+
       - id: check
+        if: steps.deadline.outputs.expired == 'false'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           HEARTBEAT: ${{ (github.event.schedule == '5 6 * * *' || inputs.heartbeat) && '1' || '' }}

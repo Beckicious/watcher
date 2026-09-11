@@ -55,6 +55,23 @@ On a **public** repo Actions minutes are unmetered, so `*/15` is fine.
 
 GitHub also delays scheduled runs under load, so treat the interval as a floor.
 
+## Deadline
+
+`DEADLINE` in `stock-watch.yml` is `2026-11-05T23:00:00Z`, midnight on 6 November
+in Europe/Zurich, so the last check runs at 23:30 local on 5 November.
+
+The first run past that point sends a "retired" notification, then disables both
+`stock-watch` and `keepalive`, which stops the schedule and the Actions billing.
+A guard alone would not be enough: a skipped step still starts the job and bills
+a full minute.
+
+To resume, bump `DEADLINE` first, otherwise the next run disables everything again:
+
+```sh
+gh workflow enable stock-watch
+gh workflow enable keepalive
+```
+
 ## Notifications
 
 | Availability value | Priority | Meaning |
