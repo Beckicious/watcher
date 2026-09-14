@@ -2,9 +2,9 @@ name: stock-watch
 
 on:
   schedule:
-    # Private repos bill each run as a full minute against 2000 min/month;
-    # */30 fits with headroom.
-    - cron: '*/30 * * * *'
+    # Offset off :00/:15/:30/:45, which are the most contended minutes and the
+    # likeliest to have their occurrence dropped rather than delayed.
+    - cron: '2-59/5 * * * *'
     # Daily liveness ping so silence is distinguishable from a dead watcher.
     - cron: '5 6 * * *'
   workflow_dispatch:
@@ -18,10 +18,6 @@ permissions:
   contents: write
   actions: write
 
-# End of 5 November 2026 in Europe/Zurich (CET, UTC+1).
-env:
-  DEADLINE: '2026-11-05T23:00:00Z'
-
 concurrency:
   group: stock-watch
   cancel-in-progress: false
@@ -32,39 +28,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - id: deadline
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: |
-          if [ "$(date -u +%s)" -lt "$(date -u -d "$DEADLINE" +%s)" ]; then
-            echo "expired=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "expired=true" >> "$GITHUB_OUTPUT"
-          curl -sS --max-time 20 --retry 2 \
-            -H "Title: Stock watcher retired" \
-            -H "Priority: default" \
-            -H "Tags: wave" \
-            -d "Deadline passed ($DEADLINE). Scheduled runs are now disabled. Re-enable with: gh workflow enable stock-watch" \
-            "https://ntfy.sh/${NTFY_TOPIC}" >/dev/null
-          gh workflow disable stock-watch --repo "$GITHUB_REPOSITORY"
-          gh workflow disable keepalive --repo "$GITHUB_REPOSITORY"
-
       - id: check
-        if: steps.deadline.outputs.expired == 'false'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           HEARTBEAT: ${{ (github.event.schedule == '5 6 * * *' || inputs.heartbeat) && '1' || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: bash ./scripts/check-stock.sh
 
       - if: steps.check.outputs.changed == 'true'
         env:
-          PREV: ${{ steps.check.outputs.prev }}
-          CURR: ${{ steps.check.outputs.status }}
+          CHANGES: ${{ steps.check.outputs.changes }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.txt
-          git commit -m "stock: ${PREV:-none} -> ${CURR}"
+          git add state
+          git commit -m "stock: ${CHANGES}"
           git push
+
+      - if: steps.check.outputs.all_expired == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl -sS --max-time 20 --retry 2 \
+            -H "Title: Stock watcher retired" \
+            -H "Priority: default" \
+            -H "Tags: wave" \
+            -d "Every watch in watches.json is past its deadline. Scheduled runs are now disabled. To resume, bump the deadlines then: gh workflow enable stock-watch keepalive" \
+            "https://ntfy.sh/${NTFY_TOPIC}" >/dev/null
+          gh workflow disable stock-watch --repo "$GITHUB_REPOSITORY"
+          gh workflow disable keepalive --repo "$GITHUB_REPOSITORY"

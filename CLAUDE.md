@@ -7,17 +7,19 @@ Runbook for this repo. Read this before changing a watch or adding a new one.
 A GitHub Actions cron job that polls a product page and pushes an ntfy
 notification when it comes back in stock. No server, no LLM in the hot path.
 
-Currently watching one product: Nintendo Switch 2 "The Legend of Zelda:
-Ocarina of Time Edition" on wog.ch.
+Watches are listed in `watches.json`. Currently three, all on wog.ch: the
+Nintendo Switch 2 "The Legend of Zelda: Ocarina of Time Edition" and the Pokemon
+30th Celebration Ultra-Premium Collections, Day and Night.
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `scripts/check-stock.sh` | Fetch, extract status, compare to state, notify |
-| `.github/workflows/stock-watch.yml` | Every 30 min, daily heartbeat, deadline self-disable |
+| `watches.json` | The watch list: id, name, url, method, deadline per entry |
+| `scripts/check-stock.sh` | Loop the list: fetch, extract, compare to state, notify |
+| `.github/workflows/stock-watch.yml` | Every 5 min, daily heartbeat, self-disable when all watches expire |
 | `.github/workflows/keepalive.yml` | Weekly commit so GitHub does not disable the schedule |
-| `state.txt` | Last seen availability value; its git log is the status history |
+| `state/<id>.txt` | Last seen value for one watch; its git log is that product's history |
 
 ## How detection works, and the trap
 
@@ -83,23 +85,29 @@ extraction strategy.
 
 ## Going from one watch to several
 
-`scripts/check-stock.sh` hardcodes `URL`, `PRODUCT_ID` and `PRODUCT_NAME` at the
-top and keeps state in a single `state.txt`. For more than one watch, turn those
-into a `watches.json` list with a per-entry strategy and give each entry its own
-state key:
+Each entry in `watches.json` carries its own extraction strategy and deadline:
 
 ```json
 {
+  "id": "256987",
   "name": "Zelda OoT Edition",
   "url": "https://www.wog.ch/...",
-  "id": "256987",
   "method": "microdata",
-  "unavailable_when": "Discontinued"
+  "deadline": "2026-11-05T23:00:00Z"
 }
 ```
 
-Keep the blind-detection behaviour per entry. One site breaking must not silence
-the others.
+`method` selects the extraction function, so a different shop means adding a
+strategy rather than special-casing the loop. The buyable-status allowlist stays
+global because it is schema.org vocabulary, not per-site.
+
+**Entries are isolated by construction.** `extract_microdata` always returns 0
+and reports failure through `detail`, so an unreachable shop notifies blind for
+that product and the loop continues. Any new strategy must behave the same way.
+Test it: point one entry at a dead URL and confirm the entries after it still
+run.
+
+Parsing the list needs `jq`, which is preinstalled on `ubuntu-latest`.
 
 Do not build a GitHub Pages UI for adding watches without re-reading the
 constraints: Pages is static and cannot write to the repo, Pages on a private
@@ -107,34 +115,59 @@ repo needs GitHub Pro, and even then the published site is world-readable.
 GitHub Issue Forms give a real mobile form with no credentials and work on a
 private repo on the free plan.
 
-## Changing the current watch
+## Adding or changing a watch
 
-Edit the constants at the top of `scripts/check-stock.sh`. Reset `state.txt` to
-the new page's current value in the same commit, otherwise the first run fires a
-spurious transition alert.
+Add an entry to `watches.json` and create `state/<id>.txt` holding the page's
+**current** value in the same commit. Skip the seeding and the first run reports
+a none -> Discontinued transition and alerts for nothing. To confirm a new watch
+works, force a heartbeat rather than leaving the state file empty.
+
+For another product on the same shop the existing strategy works and only the
+entry changes. For a different shop, do the investigation above first.
 
 ## Operational constraints
 
-**Actions quota.** The repo is private, so every run bills a full minute against
-2000 min/month regardless of the job taking ~15 seconds. `*/30` is about 1440
-min/month and fits. `*/15` is about 2880 and does not. Public repos are
-unmetered. Do not raise the frequency without redoing this arithmetic.
+**Actions quota.** The repo is public, so minutes are unmetered and the schedule
+is not cost bound. That is the only reason `2-59/5` is affordable. Private repos
+bill every run as a full minute against 2000 min/month regardless of the job
+taking ~15 seconds, where `2-59/5` is about 8640 min/month and would exhaust the
+quota in a week, hard-stopping the watcher. `*/30` (about 1440) is the only
+interval that fits privately. Redo this arithmetic before changing visibility,
+not after.
 
-**Cron is best effort.** GitHub delays scheduled runs under load, commonly 5 to
-20 minutes, and can drop them. Treat the interval as a floor. `:00` and `:30`
-are the most contended minutes; an offset like `7,37 * * * *` fares better.
+**The ntfy topic must never be committed.** A topic name is the only access
+control ntfy has: anyone who knows it can read the feed and post to it. On a
+public repo a committed topic is a published one. It lives in the `NTFY_TOPIC`
+secret and nowhere else, placeholders only in docs.
 
-**Deadline.** `DEADLINE` in `stock-watch.yml` is `2026-11-05T23:00:00Z`, which is
-midnight on 6 November in Europe/Zurich. The first run past it notifies, then
-disables both workflows. A guard alone would not do, because a skipped step still
-starts the job and bills a minute. To resume, bump `DEADLINE` first, then
-`gh workflow enable stock-watch keepalive`, otherwise the next run disables them
-again.
+**Cron is best effort, and drops rather than defers.** A missed occurrence is
+discarded, not queued, so the cron is a ceiling on how often the page gets
+checked rather than a floor. Measured over 12-14 September 2026 on `*/30`: 12 of
+70 occurrences fired (17%), median gap 2h18, worst gap 5h19, and not one run
+landed on :00 or :30. The weekly keepalive was 5h38 late. Once-daily crons get
+through, high-frequency ones get starved. `:00`, `:15`, `:30` and `:45` are the
+most contended minutes, which is what the `2-59/5` offset avoids.
+
+Contiguous run numbers across a gap are how you tell a dropped occurrence from a
+run killed by the concurrency group: a cancelled run still consumes a number and
+still appears in the list. If numbers are missing, look at concurrency instead.
+
+**Deadlines are per watch**, in `watches.json`. Zelda ends `2026-11-05T23:00:00Z`
+(midnight on 6 November in Europe/Zurich), the two Pokemon sets end
+`2026-12-31T23:00:00Z`. An expired entry is skipped and shows as retired in the
+heartbeat; the workflows only disable themselves once **every** entry has
+expired, so one product ending cannot silence the rest. To resume, bump the
+deadlines first, then `gh workflow enable stock-watch keepalive`, otherwise the
+next run disables them again.
+
+The check lives in the script rather than a workflow guard now. The old reason
+for the guard, that a skipped step still starts the job and bills a minute, went
+away when the repo became public and unmetered.
 
 **Keepalive.** GitHub disables scheduled workflows after 60 days without repo
-activity. `state.txt` only gets committed on a status change, so a product that
-stays unavailable would silently kill its own watcher. That is what the weekly
-commit is for.
+activity. A `state/<id>.txt` only gets committed on a status change, so a set of
+products that all stay unavailable would silently kill their own watcher. That is
+what the weekly commit is for.
 
 **Cron ignores DST.** The 06:05 UTC heartbeat is 08:05 local in summer and 07:05
 in winter.
@@ -152,6 +185,11 @@ the body, so the page is reachable three ways.
 | Status changed but still not orderable | default |
 | Daily heartbeat | low, silent |
 
+The heartbeat body carries the run count and longest gap over the preceding 24h,
+read back from the Actions API, so scheduler throttling surfaces on the phone
+instead of only in the Actions tab. It needs `GH_TOKEN` in the check step, and
+degrades to silence when `gh` is unavailable, which is why local runs omit it.
+
 A failed ntfy POST does not fail the job. A green run is not proof a
 notification arrived; check `gh run view --log` for the curl output.
 
@@ -160,12 +198,18 @@ notification arrived; check `gh run view --log` for the curl output.
 Run the real thing locally without touching repo state:
 
 ```sh
-NTFY_TOPIC=<topic> STATE_FILE=/tmp/s.txt bash scripts/check-stock.sh
-NTFY_TOPIC=<topic> STATE_FILE=/tmp/s.txt HEARTBEAT=1 bash scripts/check-stock.sh
+NTFY_TOPIC=<topic> STATE_DIR=/tmp/st bash scripts/check-stock.sh
+NTFY_TOPIC=<topic> STATE_DIR=/tmp/st HEARTBEAT=1 bash scripts/check-stock.sh
 ```
 
-Seed `/tmp/s.txt` with a wrong value to exercise the transition path. Trace with
-`bash -x` to confirm the curl fires. Note that ntfy publish returns HTTP 200 with
+`WATCHES=/tmp/watches-test.json` swaps the list, which is how you exercise the
+paths the live pages will not produce on demand. A `file://` url reaches a local
+fixture, so an InStock fixture tests the urgent path end to end. Seed a state
+file with a wrong value to exercise a transition.
+
+To see what would be published without publishing it, put a `curl` shim earlier
+on `PATH` that logs any argument starting `https://ntfy.sh/` and execs the real
+curl otherwise. Page fetches still go out, ntfy posts do not. Note that ntfy publish returns HTTP 200 with
 the message echoed back, but anonymous topics cannot be polled back, so read the
 publish response rather than trying to fetch the message.
 
