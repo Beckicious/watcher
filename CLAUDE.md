@@ -17,7 +17,7 @@ Nintendo Switch 2 "The Legend of Zelda: Ocarina of Time Edition" and the Pokemon
 |---|---|
 | `watches.json` | The watch list: id, name, url, method, deadline per entry |
 | `scripts/check-stock.sh` | Loop the list: fetch, extract, compare to state, notify |
-| `.github/workflows/stock-watch.yml` | Every 5 min, daily heartbeat, self-disable when all watches expire |
+| `.github/workflows/stock-watch.yml` | 4 checks a day (06:05 is the heartbeat), self-disable when all watches expire |
 | `.github/workflows/keepalive.yml` | Weekly commit so GitHub does not disable the schedule |
 | `state/<id>.txt` | Last seen value for one watch; its git log is that product's history |
 
@@ -128,12 +128,13 @@ entry changes. For a different shop, do the investigation above first.
 ## Operational constraints
 
 **Actions quota.** The repo is public, so minutes are unmetered and the schedule
-is not cost bound. That is the only reason `2-59/5` is affordable. Private repos
+is not cost bound. The current four runs a day (`5 0,12,18` plus the `5 6`
+heartbeat) are about 120 min/month, which would fit privately too. Private repos
 bill every run as a full minute against 2000 min/month regardless of the job
-taking ~15 seconds, where `2-59/5` is about 8640 min/month and would exhaust the
-quota in a week, hard-stopping the watcher. `*/30` (about 1440) is the only
-interval that fits privately. Redo this arithmetic before changing visibility,
-not after.
+taking ~15 seconds, so `2-59/5` would be about 8640 min/month and exhaust the
+quota in a week, hard-stopping the watcher. `*/30` (about 1440) is the densest
+interval that fits privately. Redo this arithmetic before changing visibility or
+the schedule, not after.
 
 **The ntfy topic must never be committed.** A topic name is the only access
 control ntfy has: anyone who knows it can read the feed and post to it. On a
@@ -146,7 +147,7 @@ checked rather than a floor. Measured over 12-14 September 2026 on `*/30`: 12 of
 70 occurrences fired (17%), median gap 2h18, worst gap 5h19, and not one run
 landed on :00 or :30. The weekly keepalive was 5h38 late. Once-daily crons get
 through, high-frequency ones get starved. `:00`, `:15`, `:30` and `:45` are the
-most contended minutes, which is what the `2-59/5` offset avoids.
+most contended minutes, which is what the `:05` offset avoids.
 
 Contiguous run numbers across a gap are how you tell a dropped occurrence from a
 run killed by the concurrency group: a cancelled run still consumes a number and

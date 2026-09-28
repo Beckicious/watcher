@@ -65,11 +65,11 @@ alerts you that the watcher went blind, rather than failing silently.
 
 ## Polling interval
 
-`.github/workflows/stock-watch.yml` runs `2-59/5 * * * *`, every five minutes
-offset off the contended quarter-hour marks. That is only affordable because the
-repo is **public**, where Actions minutes are unmetered. On a **private** repo
-every run bills a full minute against the 2000 min/month quota, which caps the
-schedule at `*/30` (about 1440/month) and rules out anything shorter.
+`.github/workflows/stock-watch.yml` checks four times a day, at 00:05, 06:05,
+12:05 and 18:05 UTC, offset off the contended quarter-hour marks. The 06:05 run
+is also the daily heartbeat. That is about 120 runs a month, which fits the 2000
+min/month quota even on a **private** repo, where every run bills a full minute.
+A private repo caps the schedule at `*/30` (about 1440/month).
 
 GitHub's scheduler is best effort and **drops** occurrences rather than deferring
 them, so the cron is a ceiling on how often you get checked, not a floor. Over
